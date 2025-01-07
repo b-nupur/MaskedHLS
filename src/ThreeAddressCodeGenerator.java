@@ -212,12 +212,27 @@ public class ThreeAddressCodeGenerator {
                     operands.push(nextOperand); // Push updated operand to stack
                     prevToken = Token.fromString(nextOperand);
                 } else {
-                    // Handle binary operators
-                    while (!operators.isEmpty() && precedence(operators.peek().getValue()) >= precedence(token.getValue())) {
-                        processOperation(operands, operators.pop().getValue());
+                    if (prevToken == null || prevToken.isOperator() || (prevToken.isParenthesis() && prevToken.getValue().equals("("))) {
+                        // handle unary operators
+                        if (token.getValue().equals("+") || token.getValue().equals("-")) {
+                            // unary + or -
+                            String nextOperand = matcher.find() ? matcher.group() : null;
+                            if (nextOperand == null || !nextOperand.matches("[a-zA-Z][a-zA-Z0-9_]*|\\d+")) {
+                                throw new IllegalArgumentException("Invalid unary operator: " + token.getValue());
+                            }
+                            String temp = newTemp();
+                            emit(token.getValue(), nextOperand, null, temp);
+                            operands.push(temp);
+                            prevToken = Token.fromString(nextOperand);
+                        }
+                    } else {
+                        // Handle binary operators
+                        while (!operators.isEmpty() && precedence(operators.peek().getValue()) >= precedence(token.getValue())) {
+                            processOperation(operands, operators.pop().getValue());
+                        }
+                        operators.push(token);
+                        prevToken = token;
                     }
-                    operators.push(token);
-                    prevToken = token;
                 }
             } else if (token.isParenthesis()) {
                 if (token.getValue().equals("(")) {
@@ -320,6 +335,7 @@ public class ThreeAddressCodeGenerator {
                 c = b++;
                 b = ++c;
                 z = ++b + 3;
+                p = -q + +r;
                 return (a + b) / 2;
                 """;
 
