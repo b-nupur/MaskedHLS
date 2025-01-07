@@ -48,7 +48,7 @@ public class ThreeAddressCodeGenerator {
         public static Token fromString(String str) {
             if (str.matches("[a-zA-Z_][a-zA-Z0-9_]*|\\d+")) {
                 return new Token(str, Type.OPERAND);
-            } else if (str.matches("[-+*/%&|^<>=]=?|<<=?|>>=?|&&|\\|\\||[-+!]|\\+\\+|--")) {
+            } else if (str.matches("[-+*/%&|^<>=]=?|<<=?|>>=?|&&|\\|\\||[-+~]|\\+\\+|--")) {
                 return new Token(str, Type.OPERATOR);
             } else if (str.equals("(") || str.equals(")")) {
                 return new Token(str, Type.PARENTHESIS);
@@ -159,7 +159,7 @@ public class ThreeAddressCodeGenerator {
         Stack<Token> operators = new Stack<>();
 
         // Updated regex token pattern
-       String tokenPattern = "\\+\\+|--|==|!=|<=|>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|<<=|>>=|&&|\\|\\||<<|>>|[-+*/%&|^<>=()\\[\\]?:]|[a-zA-Z_][a-zA-Z0-9_]*|\\d+";
+       String tokenPattern = "\\+\\+|--|==|!=|<=|>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|<<=|>>=|&&|\\|\\||<<|>>|[-+*/%&|^<>=()~\\[\\]?:]|[a-zA-Z_][a-zA-Z0-9_]*|\\d+";
 
         Pattern pattern = Pattern.compile(tokenPattern);
         Matcher matcher = pattern.matcher(expression);
@@ -200,7 +200,20 @@ public class ThreeAddressCodeGenerator {
                     operands.push(nextOperand); // Push updated operand to stack
                     prevToken = Token.fromString(nextOperand);
                 } else {
-                    if (prevToken == null || prevToken.isOperator() || (prevToken.isParenthesis() && prevToken.getValue().equals("("))) {
+                    if (token.getValue().equals("~")
+                            && (prevToken == null || prevToken.isOperator() || (prevToken.isParenthesis() && prevToken.getValue().equals("(")))) {
+                        if (!matcher.find()) {
+                            throw new IllegalArgumentException("Invalid operand after bitwise NOT operator: " + token.getValue());
+                        }
+                        String nextOperand = matcher.group().trim();
+                        if (!nextOperand.matches("[a-zA-Z_][a-zA-Z0-9_]*|\\d+")) {
+                            throw new IllegalArgumentException("Invalid operand after bitwise NOT operator: " + token.getValue());
+                        }
+                        String temp = newTemp();
+                        emit("~", nextOperand, null, temp); // Emit TAC for bitwise NOT
+                        operands.push(temp); // Push the result to the stack
+                        prevToken = Token.fromString(nextOperand);}
+                    else if (prevToken == null || prevToken.isOperator() || (prevToken.isParenthesis() && prevToken.getValue().equals("("))) {
                         // handle unary operators
                         if (token.getValue().equals("+") || token.getValue().equals("-")) {
                             // unary + or -
@@ -325,6 +338,8 @@ public class ThreeAddressCodeGenerator {
                 b = ++c;
                 z = ++b + 3 + d;
                 p = -q + +r * e;
+                z = ~x;
+                ww = ~x + 2;
                 return (a + b) / 2;
                 """;
 
