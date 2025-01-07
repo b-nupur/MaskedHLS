@@ -18,6 +18,7 @@ public class ThreeAddressCodeGenerator {
 
         private final String value;
         private final Type type;
+//        private final boolean isUnary;
 
         public Token(String value, Type type) {
             this.value = value;
@@ -47,7 +48,7 @@ public class ThreeAddressCodeGenerator {
         public static Token fromString(String str) {
             if (str.matches("[a-zA-Z_][a-zA-Z0-9_]*|\\d+")) {
                 return new Token(str, Type.OPERAND);
-            } else if (str.matches("[-+*/%&|^<>=]=?|<<=?|>>=?|&&|\\|\\||[-+]{1,2}")) {
+            } else if (str.matches("[-+*/%&|^<>=]=?|<<=?|>>=?|&&|\\|\\||[-+!]|\\+\\+|--")) {
                 return new Token(str, Type.OPERATOR);
             } else if (str.equals("(") || str.equals(")")) {
                 return new Token(str, Type.PARENTHESIS);
@@ -98,25 +99,14 @@ public class ThreeAddressCodeGenerator {
             } else if (statement.matches(".+=.+")) { // Match assignment or compound assignment
                 processAssignment(statement);
             } else if(statement.startsWith("++") || statement.startsWith("--")){
-                processPreIncDec(statement);
+                parseExpression(statement);
             }
             else if(statement.endsWith("++") || statement.endsWith("--")){
-                processPostIncDec(statement);
+                parseExpression(statement);
             }
         }
     }
 
-    private void processPreIncDec(String statement){
-        Pattern preIncDecPattern = Pattern.compile("");
-        Matcher matcher = preIncDecPattern.matcher(statement);
-        if(matcher.matches()){
-
-        }
-    }
-
-    private void processPostIncDec(String statement){
-
-    }
     /**
      * Processes an assignment statement, including compound assignments.
      */
@@ -183,22 +173,20 @@ public class ThreeAddressCodeGenerator {
             Token token = Token.fromString(tokenStr);
 
             if (token.isOperand()) {
-                // Handle Postfix Increment/Decrement (e.g., x++, x--)
-                if (prevToken != null && prevToken.isOperand() && prevToken.getValue().matches("[a-zA-Z_][a-zA-Z0-9_]*")
-                        && (token.getValue().equals("++") || token.getValue().equals("--"))) {
-                    String variable = prevToken.getValue();
+                operands.push(token.getValue());
+                prevToken = token;
+            } else if (token.isOperator()) {
+                // Handle Postfix Increment/Decrement (e.g., b++)
+                if (prevToken != null && prevToken.isOperand() && (token.getValue().equals("++") || token.getValue().equals("--"))) {
+                    String variable = operands.pop();
                     String temp = newTemp();
                     instructions.add(temp + " = " + variable); // Store original value
                     emit(token.getValue().substring(0, 1), variable, "1", variable); // Increment/Decrement the variable
-                    operands.push(temp); // Push the original value to the stack
-                } else {
-                    // Push operand onto the stack
-                    operands.push(token.getValue());
+                    operands.push(temp); // Push original value to stack
+                    prevToken = token;
                 }
-                prevToken = token;
-            } else if (token.isOperator()) {
                 // Handle Prefix Increment/Decrement (e.g., ++x, --x)
-                if ((token.getValue().equals("++") || token.getValue().equals("--"))
+                else if ((token.getValue().equals("++") || token.getValue().equals("--"))
                         && (prevToken == null || prevToken.isOperator() || (prevToken.isParenthesis() && prevToken.getValue().equals("(")))) {
                     if (!matcher.find()) {
                         throw new IllegalArgumentException("Invalid operand after prefix operator: " + token.getValue());
@@ -332,10 +320,11 @@ public class ThreeAddressCodeGenerator {
                 b = 5;
                 a += x + y;
                 b *= z - w;
+                ++ohh;
                 c = b++;
                 b = ++c;
-                z = ++b + 3;
-                p = -q + +r;
+                z = ++b + 3 + d;
+                p = -q + +r * e;
                 return (a + b) / 2;
                 """;
 
