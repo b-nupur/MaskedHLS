@@ -167,35 +167,58 @@ public class ThreeAddressCodeGenerator {
     private String parseExpression(String expression) {
         Stack<String> operands = new Stack<>();
         Stack<Token> operators = new Stack<>();
-        StringTokenizer tokenizer = new StringTokenizer(expression, "+-*/%&|^<>=()[]?:", true);
+
+        // Updated regex token pattern
+       String tokenPattern = "\\+\\+|--|==|!=|<=|>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|<<=|>>=|&&|\\|\\||<<|>>|[-+*/%&|^<>=()\\[\\]?:]|[a-zA-Z_][a-zA-Z0-9_]*|\\d+";
+
+        Pattern pattern = Pattern.compile(tokenPattern);
+        Matcher matcher = pattern.matcher(expression);
 
         Token prevToken = null;
 
-        while (tokenizer.hasMoreTokens()) {
-            String tokenStr = tokenizer.nextToken().trim();
+        while (matcher.find()) {
+            String tokenStr = matcher.group().trim();
             if (tokenStr.isEmpty()) continue;
 
             Token token = Token.fromString(tokenStr);
 
             if (token.isOperand()) {
-                operands.push(token.getValue());
+                // Handle Postfix Increment/Decrement (e.g., x++, x--)
+                if (prevToken != null && prevToken.isOperand() && prevToken.getValue().matches("[a-zA-Z_][a-zA-Z0-9_]*")
+                        && (token.getValue().equals("++") || token.getValue().equals("--"))) {
+                    String variable = prevToken.getValue();
+                    String temp = newTemp();
+                    instructions.add(temp + " = " + variable); // Store original value
+                    emit(token.getValue().substring(0, 1), variable, "1", variable); // Increment/Decrement the variable
+                    operands.push(temp); // Push the original value to the stack
+                } else {
+                    // Push operand onto the stack
+                    operands.push(token.getValue());
+                }
                 prevToken = token;
             } else if (token.isOperator()) {
-                if (prevToken == null || prevToken.isOperator() || prevToken.isParenthesis() && prevToken.getValue().equals("(")) {
-                    // Handle unary operators
-                    if (token.getValue().equals("+") || token.getValue().equals("-") || token.getValue().equals("++")) {
-                        String operand = operands.pop();
-                        String temp = newTemp();
-                        emit(token.getValue(), operand, null, temp);
-                        operands.push(temp);
+                // Handle Prefix Increment/Decrement (e.g., ++x, --x)
+                if ((token.getValue().equals("++") || token.getValue().equals("--"))
+                        && (prevToken == null || prevToken.isOperator() || (prevToken.isParenthesis() && prevToken.getValue().equals("(")))) {
+                    if (!matcher.find()) {
+                        throw new IllegalArgumentException("Invalid operand after prefix operator: " + token.getValue());
                     }
+                    String nextOperand = matcher.group().trim(); // Look ahead for operand
+                    if (!nextOperand.matches("[a-zA-Z_][a-zA-Z0-9_]*")) {
+                        throw new IllegalArgumentException("Invalid operand after prefix operator: " + token.getValue());
+                    }
+                    String temp = newTemp();
+                    emit(token.getValue().substring(0, 1), nextOperand, "1", nextOperand); // Increment/Decrement the operand
+                    operands.push(nextOperand); // Push updated operand to stack
+                    prevToken = Token.fromString(nextOperand);
                 } else {
+                    // Handle binary operators
                     while (!operators.isEmpty() && precedence(operators.peek().getValue()) >= precedence(token.getValue())) {
                         processOperation(operands, operators.pop().getValue());
                     }
                     operators.push(token);
+                    prevToken = token;
                 }
-                prevToken = token;
             } else if (token.isParenthesis()) {
                 if (token.getValue().equals("(")) {
                     operators.push(token);
@@ -226,6 +249,7 @@ public class ThreeAddressCodeGenerator {
 
         return operands.pop();
     }
+
 
     /**
      * Processes a single operation and generates TAC.
@@ -295,6 +319,7 @@ public class ThreeAddressCodeGenerator {
                 b *= z - w;
                 c = b++;
                 b = ++c;
+                z = ++b + 3;
                 return (a + b) / 2;
                 """;
 
