@@ -97,10 +97,26 @@ public class ThreeAddressCodeGenerator {
                 instructions.add("return " + result);
             } else if (statement.matches(".+=.+")) { // Match assignment or compound assignment
                 processAssignment(statement);
+            } else if(statement.startsWith("++") || statement.startsWith("--")){
+                processPreIncDec(statement);
+            }
+            else if(statement.endsWith("++") || statement.endsWith("--")){
+                processPostIncDec(statement);
             }
         }
     }
 
+    private void processPreIncDec(String statement){
+        Pattern preIncDecPattern = Pattern.compile("");
+        Matcher matcher = preIncDecPattern.matcher(statement);
+        if(matcher.matches()){
+
+        }
+    }
+
+    private void processPostIncDec(String statement){
+
+    }
     /**
      * Processes an assignment statement, including compound assignments.
      */
@@ -118,15 +134,31 @@ public class ThreeAddressCodeGenerator {
             String simpleOperator = operator.substring(0, operator.length() - 1); // Extract base operator (e.g., +, -, etc.)
             String result = parseExpression(lhs + " " + simpleOperator + " " + rhs); // Parse the equivalent binary expression
             instructions.add(lhs + " = " + result); // Emit assignment instruction
-        } else {
+        } else if(statement.matches(".+=.+")){
             // Handle simple assignments
             String[] parts = statement.split("=");
             String lhs = parts[0].trim(); // Left-hand side (variable being assigned)
             String rhs = parts[1].trim(); // Right-hand side (expression)
-
-            String result = parseExpression(rhs);
-            instructions.add(lhs + " = " + result); // Emit assignment instruction
+            // check for pre-increment/decrement (e.g., ++x, --x)
+            if(rhs.matches("(\\+\\+|--)[a-zA-Z_][a-zA-Z0-9_]*")){
+                String operator = rhs.substring(0,2); // extract operator (++ or --)
+                String variable = rhs.substring(2).trim(); // extract variable name (++var)
+                String temp = newTemp(); // Temporary variable for incremented value
+                emit("+", variable, "1", temp); // generates the TAC for the operation
+                instructions.add(lhs + " = " + temp);
+            }else if(rhs.matches("[a-zA-Z_][a-zA-Z0-9_]*(\\+\\+|--)")){
+                String variable = rhs.substring(0, rhs.length() - 2).trim(); // extract the variable name
+                String operator = rhs.substring(rhs.length()-2); // extract post inc/dec operator (x++ or x--)
+                String temp = newTemp(); // Temporary variable for the original value
+                instructions.add(lhs + " = " + variable);
+                emit("+", variable, "1", variable); // increment the variable
+            }else {
+                // handle simple assignment expression (x = y + z)
+                String result = parseExpression(rhs);
+                instructions.add(lhs + " = " + result); // Emit assignment instruction
+            }
         }
+
     }
 
     /**
@@ -214,6 +246,7 @@ public class ThreeAddressCodeGenerator {
      */
     private int precedence(String operator) {
         return switch (operator) {
+            case "++", "--" -> 4;
             case "*", "/", "%" -> 3; // Multiplicative
             case "+", "-" -> 2; // Additive
             case "<<", ">>" -> 1; // Shift
@@ -260,6 +293,8 @@ public class ThreeAddressCodeGenerator {
                 b = 5;
                 a += x + y;
                 b *= z - w;
+                c = b++;
+                b = ++c;
                 return (a + b) / 2;
                 """;
 
