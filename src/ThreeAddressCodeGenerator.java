@@ -10,6 +10,8 @@ public class ThreeAddressCodeGenerator {
     private int tempCounter = 0; // Counter for generating temporary variables
     private List<String> instructions = new ArrayList<>(); // Stores TAC instructions
     private Map<String, String> expressionCache = new HashMap<>();
+    List<String> delayedInstructions = new ArrayList<>();
+
     /**
      * Inner class to represent a token.
      */
@@ -152,13 +154,13 @@ public class ThreeAddressCodeGenerator {
             String lhs = parts[0].trim(); // Left-hand side (variable being assigned)
             String rhs = parts[1].trim(); // Right-hand side (expression)
             // check for pre-increment/decrement (e.g., ++x, --x)
-            if(rhs.matches("(\\+\\+|--)[a-zA-Z_][a-zA-Z0-9_]*")){
+            if(rhs.matches("(\\+\\+|--)[a-zA-Z_][a-zA-Z0-9_]*;")){
                 String operator = rhs.substring(0,2); // extract operator (++ or --)
                 String variable = rhs.substring(2).trim(); // extract variable name (++var)
                 String temp = newTemp(); // Temporary variable for incremented value
                 emit("+", variable, "1", temp); // generates the TAC for the operation
                 instructions.add(lhs + " = " + temp);
-            }else if(rhs.matches("[a-zA-Z_][a-zA-Z0-9_]*(\\+\\+|--)")){
+            }else if(rhs.matches("[a-zA-Z_][a-zA-Z0-9_]*(\\+\\+|--);")){
                 String variable = rhs.substring(0, rhs.length() - 2).trim(); // extract the variable name
                 String operator = rhs.substring(rhs.length()-2); // extract post inc/dec operator (x++ or x--)
                 String temp = newTemp(); // Temporary variable for the original value
@@ -190,6 +192,7 @@ public class ThreeAddressCodeGenerator {
 
         while (matcher.find()) {
             String tokenStr = matcher.group().trim();
+//            System.out.println("[processing token...]\n"+tokenStr);
             if (tokenStr.isEmpty()) continue;
 
             Token token = Token.fromString(tokenStr);
@@ -202,9 +205,12 @@ public class ThreeAddressCodeGenerator {
                 if (prevToken != null && prevToken.isOperand() && (token.getValue().equals("++") || token.getValue().equals("--"))) {
                     String variable = operands.pop();
                     String temp = newTemp();
+                    // if the operator exist after the postfix then
                     instructions.add(temp + " = " + variable); // Store original value
-                    emit(token.getValue().substring(0, 1), variable, "1", variable); // Increment/Decrement the variable
+                    delayedInstructions.add(variable + " = " + variable + " " + token.getValue().substring(0, 1) + " 1"); // Increment/Decrement the variable
+//                    System.out.println(instructions.getLast());
                     operands.push(temp); // Push original value to stack
+                    token = Token.fromString(temp);
                     prevToken = token;
                 }
                 // Handle Prefix Increment/Decrement (e.g., ++x, --x)
@@ -292,6 +298,10 @@ public class ThreeAddressCodeGenerator {
             }
             processOperation(operands, op.getValue());
         }
+        for (String instr : delayedInstructions) {
+            instructions.add(instr);
+        }
+        delayedInstructions.clear(); // Clear the delayed instructions
 
 
         if (operands.size() != 1) {
@@ -449,7 +459,10 @@ public class ThreeAddressCodeGenerator {
                 int y = ~x;
                 int z = ~x + 2 * 6;
                 int* ptr = & x;
-                int y = *ptr + 3;  
+                int y = z + *ptr + 3;  
+                a = a + b * c % d;
+                x = p++ + ++p;
+                a = 10 * p;
                 return z;
                 """;
 
