@@ -9,7 +9,7 @@ public class ThreeAddressCodeGenerator {
 
     private int tempCounter = 0; // Counter for generating temporary variables
     private List<String> instructions = new ArrayList<>(); // Stores TAC instructions
-
+    private Map<String, String> expressionCache = new HashMap<>();
     /**
      * Inner class to represent a token.
      */
@@ -66,16 +66,33 @@ public class ThreeAddressCodeGenerator {
         return "t" + (++tempCounter);
     }
 
+    private void clearCache() {
+        expressionCache.clear();
+    }
+
     /**
      * Emits a Three-Address Code instruction.
      */
     private void emit(String operation, String arg1, String arg2, String result) {
-        if (arg2 == null) {
-            instructions.add(result + " = " + operation + " " + arg1); // Unary operation
+        if(operation.endsWith("u")){
+            operation = operation.substring(0, operation.length()-1);
+        }
+
+        String expression = (arg2 == null) ? operation + " " + arg1 : arg1 + " " + operation + " " + arg2;
+
+        // Check for common subexpression
+        if (expressionCache.containsKey(expression)) {
+            result = expressionCache.get(expression);
         } else {
-            instructions.add(result + " = " + arg1 + " " + operation + " " + arg2); // Binary operation
+            if (arg2 == null) {
+                instructions.add(result + " = " + operation + " " + arg1); // Unary operation
+            } else {
+                instructions.add(result + " = " + arg1 + " " + operation + " " + arg2); // Binary operation
+            }
+            expressionCache.put(expression, result); // Cache the new expression
         }
     }
+
 
     /**
      * Translates a function body into Three-Address Code (TAC).
@@ -90,13 +107,18 @@ public class ThreeAddressCodeGenerator {
         for (String statement : statements) {
             statement = statement.trim();
             if (statement.isEmpty()) continue;
-
+            // new independent statement
+//            clearCache();
             if (statement.startsWith("return")) {
                 // Handle return statements
                 String returnValue = statement.replace("return", "").trim();
                 String result = parseExpression(returnValue);
                 instructions.add("return " + result);
-            } else if (statement.matches(".+=.+")) { // Match assignment or compound assignment
+            }// Handle pointer declarations
+            else if (statement.matches("(int|float|double|char|short|long|unsigned|signed)\\s*\\*\\s*[a-zA-Z_][a-zA-Z0-9_]*\\s*(=.*)?")) {
+                processPointerDeclaration(statement);
+            }
+            else if (statement.matches(".+=.+")) { // Match assignment or compound assignment
                 processAssignment(statement);
             } else if(statement.startsWith("++") || statement.startsWith("--")){
                 parseExpression(statement);
@@ -198,6 +220,9 @@ public class ThreeAddressCodeGenerator {
                     String temp = newTemp();
                     emit(token.getValue().substring(0, 1), nextOperand, "1", nextOperand); // Increment/Decrement the operand
                     operands.push(nextOperand); // Push updated operand to stack
+//                    String operator = token.getValue();
+//                    operands.push(nextOperand);
+//                    processOperation(operands, operator);
                     prevToken = Token.fromString(nextOperand);
                 } else {
                     if (token.getValue().equals("~")
@@ -209,26 +234,35 @@ public class ThreeAddressCodeGenerator {
                         if (!nextOperand.matches("[a-zA-Z_][a-zA-Z0-9_]*|\\d+")) {
                             throw new IllegalArgumentException("Invalid operand after bitwise NOT operator: " + token.getValue());
                         }
-                        String temp = newTemp();
-                        emit("~", nextOperand, null, temp); // Emit TAC for bitwise NOT
-                        operands.push(temp); // Push the result to the stack
+//                        String temp = newTemp();
+//                        emit("~", nextOperand, null, temp); // Emit TAC for bitwise NOT
+//                        operands.push(temp); // Push the result to the stack
+                        String operator = token.getValue();
+//                        System.out.println("[currently processing :]"+ operator);
+                        operands.push(nextOperand);
+                        processOperation(operands, operator);
                         prevToken = Token.fromString(nextOperand);}
                     else if (prevToken == null || prevToken.isOperator() || (prevToken.isParenthesis() && prevToken.getValue().equals("("))) {
                         // handle unary operators
-                        if (token.getValue().equals("+") || token.getValue().equals("-")) {
+                        String operator = token.getValue() +"u";
+                        if (token.getValue().equals("*")|| token.getValue().equals("&") || token.getValue().equals("+") || token.getValue().equals("-")) {
                             // unary + or -
                             String nextOperand = matcher.find() ? matcher.group() : null;
                             if (nextOperand == null || !nextOperand.matches("[a-zA-Z][a-zA-Z0-9_]*|\\d+")) {
                                 throw new IllegalArgumentException("Invalid unary operator: " + token.getValue());
                             }
-                            String temp = newTemp();
-                            emit(token.getValue(), nextOperand, null, temp);
-                            operands.push(temp);
+//                            String temp = newTemp();
+//                            emit(operator, nextOperand, null, temp);
+                            operands.push(nextOperand);
+                            processOperation(operands, operator);
                             prevToken = Token.fromString(nextOperand);
                         }
                     } else {
                         // Handle binary operators
-                        while (!operators.isEmpty() && precedence(operators.peek().getValue()) >= precedence(token.getValue())) {
+                        while (!operators.isEmpty() && (
+                                (associativity(token.getValue()).equals("L") && precedence(operators.peek().getValue()) >= precedence(token.getValue())) ||
+                                        (associativity(token.getValue()).equals("R") && precedence(operators.peek().getValue()) > precedence(token.getValue()))
+                        )) {
                             processOperation(operands, operators.pop().getValue());
                         }
                         operators.push(token);
@@ -259,6 +293,7 @@ public class ThreeAddressCodeGenerator {
             processOperation(operands, op.getValue());
         }
 
+
         if (operands.size() != 1) {
             throw new IllegalArgumentException("Invalid syntax: Expression parsing resulted in incorrect operands.");
         }
@@ -271,31 +306,91 @@ public class ThreeAddressCodeGenerator {
      * Processes a single operation and generates TAC.
      */
     private void processOperation(Stack<String> operands, String operator) {
-        if (operands.size() < 2) {
-            throw new IllegalArgumentException("Invalid syntax: Not enough operands for binary operator '" + operator + "'.");
+        String expression; // Cache key for the expression
+        String temp; // Temporary variable for the result
+
+        if (operator.endsWith("u") || operator.equals("~")) { // Handle unary operators
+            if (operands.isEmpty()) {
+                throw new IllegalArgumentException("Invalid syntax: Not enough operands for unary operator '" + operator + "'.");
+            }
+
+            String operand = operands.pop();
+            expression = operator + " " + operand; // Key for unary operation
+
+            // Check for common subexpression
+            if (expressionCache.containsKey(expression)) {
+                operands.push(expressionCache.get(expression)); // Reuse existing temporary variable
+            } else {
+                if (operator.equals("~")) {
+                    // Special case for bitwise NOT operator
+                    temp = newTemp();
+                    emit(operator, operand, null, temp); // Emit TAC for bitwise NOT
+                } else {
+                    temp = newTemp(); // Generate new temporary variable
+                    emit(operator, operand, null, temp); // Emit TAC for generic unary operation
+                }
+                expressionCache.put(expression, temp); // Cache the result
+                operands.push(temp);
+            }
+        } else { // Handle binary operators
+            if (operands.size() < 2) {
+                throw new IllegalArgumentException("Invalid syntax: Not enough operands for binary operator '" + operator + "'.");
+            }
+
+            String operand2 = operands.pop();
+            String operand1 = operands.pop();
+            expression = operand1 + " " + operator + " " + operand2; // Key for binary operation
+
+            // Check for common subexpression
+            if (expressionCache.containsKey(expression)) {
+                operands.push(expressionCache.get(expression)); // Reuse existing temporary variable
+            } else {
+                temp = newTemp(); // Generate new temporary variable
+                emit(operator, operand1, operand2, temp); // Emit TAC for binary operation
+                expressionCache.put(expression, temp); // Cache the result
+                operands.push(temp);
+            }
         }
-        String operand2 = operands.pop();
-        String operand1 = operands.pop();
-        String temp = newTemp();
-        emit(operator, operand1, operand2, temp);
-        operands.push(temp);
     }
+
 
     /**
      * Determines the precedence of an operator.
      */
     private int precedence(String operator) {
         return switch (operator) {
-            case "++", "--" -> 4;
-            case "*", "/", "%" -> 3; // Multiplicative
-            case "+", "-" -> 2; // Additive
-            case "<<", ">>" -> 1; // Shift
-            case "<", "<=", ">", ">=", "==", "!=" -> 0; // Relational
-            case "&", "^", "|" -> -1; // Bitwise
-            case "&&", "||" -> -2; // Logical
-            case "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=" -> -3; // Compound assignment
-            default -> -4; // Lowest precedence
+            case "++", "--" -> 15;  // Post-increment/decrement
+            case "~", "*u", "&u", "+u", "-u" -> 14;  // Unary operators (bitwise NOT, dereference, etc.)
+            case "*", "/", "%" -> 13;  // Multiplicative
+            case "+", "-" -> 12;  // Additive
+            case "<<", ">>" -> 11;  // Shift
+            case "<", "<=", ">", ">=" -> 10;  // Relational
+            case "==", "!=" -> 9;  // Equality
+            case "&" -> 8;  // Bitwise AND
+            case "^" -> 7;  // Bitwise XOR
+            case "|" -> 6;  // Bitwise OR
+            case "&&" -> 5;  // Logical AND
+            case "||" -> 4;  // Logical OR
+            case "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=" -> 3;  // Assignment operators
+            default -> -1;  // Lowest precedence (unknown operators)
         };
+    }
+    private String associativity(String operator) {
+        return switch (operator) {
+            case "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=" -> "R"; // Right-to-left
+            case "++", "--", "~", "*u", "&u", "+u", "-u" -> "R"; // Unary operators
+            default -> "L"; // Left-to-right for all others
+        };
+    }
+
+    private void processOperators(Stack<String> operands, Stack<Token> operators, Token token) {
+        while (!operators.isEmpty() && (
+                (associativity(token.getValue()).equals("L") && precedence(operators.peek().getValue()) >= precedence(token.getValue())) ||
+                        (associativity(token.getValue()).equals("R") && precedence(operators.peek().getValue()) > precedence(token.getValue()))
+        )) {
+            processOperation(operands, operators.pop().getValue());
+        }
+        operators.push(token);
     }
 
     /**
@@ -307,12 +402,34 @@ public class ThreeAddressCodeGenerator {
 
         for (String line : lines) {
             line = line.trim();
-            if (!line.matches("(int|float|double|char|short|long|unsigned|signed)[^;]*;")) {
+
+            // Match variable declarations with assignments
+            if (line.matches("(int|float|double|char|short|long|unsigned|signed)\\s+[a-zA-Z_][a-zA-Z0-9_]*\\s*=.+;")) {
+                processedBody.append(line.replaceFirst("(int|float|double|char|short|long|unsigned|signed)\\s+", "")).append("\n");
+            } else if (!line.matches("(int|float|double|char|short|long|unsigned|signed)\\s+[a-zA-Z_][a-zA-Z0-9_]*\\s*;")) {
+                // Skip pure declarations but include all other lines
                 processedBody.append(line).append("\n");
             }
         }
         return processedBody.toString();
     }
+    private void processPointerDeclaration(String statement) {
+        String[] parts = statement.split("=");
+        String lhs = parts[0].trim(); // e.g., "int* ptr"
+        String rhs = parts.length > 1 ? parts[1].trim() : null; // Right-hand side (if initialized)
+
+        String type = lhs.split("\\*")[0].trim(); // Extract type, e.g., "int"
+        String pointer = lhs.split("\\*")[1].trim(); // Extract pointer variable, e.g., "ptr"
+
+        if (rhs != null) {
+            String result = parseExpression(rhs); // Parse the initialization expression
+            instructions.add(pointer + " = " + result); // Emit TAC for initialization
+        } else {
+            instructions.add(pointer + " = null"); // Default initialization for uninitialized pointers
+        }
+    }
+
+
 
     /**
      * Prints the generated TAC instructions.
@@ -328,19 +445,12 @@ public class ThreeAddressCodeGenerator {
 
         // Example function body
         String functionBody = """
-                int asdd , b, c;
-                asdd = 0;
-                b = 5;
-                a += x + y;
-                b *= z - w;
-                ++ohh;
-                c = b++;
-                b = ++c;
-                z = ++b + 3 + d;
-                p = -q + +r * e;
-                z = ~x;
-                ww = ~x + 2;
-                return (a + b) / 2;
+                int x = 5;
+                int y = ~x;
+                int z = ~x + 2 * 6;
+                int* ptr = & x;
+                int y = *ptr + 3;  
+                return z;
                 """;
 
         generator.translateToTAC(functionBody);
