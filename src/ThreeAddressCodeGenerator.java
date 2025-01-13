@@ -11,7 +11,11 @@ public class ThreeAddressCodeGenerator {
     private List<String> instructions = new ArrayList<>(); // Stores TAC instructions
     private Map<String, String> expressionCache = new HashMap<>();
     List<String> delayedInstructions = new ArrayList<>();
+    public int getDom_count() {
+        return dom_count;
+    }
 
+    int dom_count;
     /**
      * Inner class to represent a token.
      */
@@ -48,7 +52,7 @@ public class ThreeAddressCodeGenerator {
         }
 
         public static Token fromString(String str) {
-            if (str.matches("[a-zA-Z_][a-zA-Z0-9_]*|\\d+")) {
+            if (str.matches("[a-zA-Z_][a-zA-Z0-9_]*|\\d+|\\b0[xX][0-9a-fA-F]+\\b")) {
                 return new Token(str, Type.OPERAND);
             } else if (str.matches("[-+*/%&|^<>=]=?|<<=?|>>=?|&&|\\|\\||[-+~]|\\+\\+|--")) {
                 return new Token(str, Type.OPERATOR);
@@ -57,6 +61,13 @@ public class ThreeAddressCodeGenerator {
             } else {
                 return new Token(str, Type.UNKNOWN);
             }
+        }
+
+        @Override
+        public String toString() {
+            return "{" +
+                     value +
+                    '}';
         }
     }
 
@@ -76,22 +87,44 @@ public class ThreeAddressCodeGenerator {
      * Emits a Three-Address Code instruction.
      */
     private void emit(String operation, String arg1, String arg2, String result) {
+
         if(operation.endsWith("u")){
             operation = operation.substring(0, operation.length()-1);
         }
+        if (operation.equals("&")){
+            String hexPattern = "^0[xX][0-9a-fA-F]+$";
+            String decimalPattern = "^-?\\d+$";
 
+            // increment dom count if the both argument of & are variables
+
+            if(!arg1.matches(hexPattern) && !arg1.matches(decimalPattern) && !arg2.matches(hexPattern) && !arg2.matches(decimalPattern)){
+                dom_count++;
+            }
+        }
+        // Create the expression string
         String expression = (arg2 == null) ? operation + " " + arg1 : arg1 + " " + operation + " " + arg2;
 
-        // Check for common subexpression
+        // Optimize for common subexpression
         if (expressionCache.containsKey(expression)) {
-            result = expressionCache.get(expression);
+            // Reuse the previously computed result
+            String cachedResult = expressionCache.get(expression);
+            if (!result.equals(cachedResult)) {
+                instructions.add(result + " = " + cachedResult); // Direct assignment
+            }
+//            lastExpression = expression;
+//            lastAssignedVariable = cachedResult;
         } else {
+            // Emit a new instruction
             if (arg2 == null) {
                 instructions.add(result + " = " + operation + " " + arg1); // Unary operation
             } else {
                 instructions.add(result + " = " + arg1 + " " + operation + " " + arg2); // Binary operation
             }
-            expressionCache.put(expression, result); // Cache the new expression
+
+            // Cache the expression and result
+//            expressionCache.put(expression, result);
+//            lastExpression = expression;
+//            lastAssignedVariable = result;
         }
     }
 
@@ -114,8 +147,8 @@ public class ThreeAddressCodeGenerator {
             if (statement.startsWith("return")) {
                 // Handle return statements
                 String returnValue = statement.replace("return", "").trim();
-                String result = parseExpression(returnValue);
-                instructions.add("return " + result);
+                String result = parseExpression(returnValue, null);
+                instructions.add("return value :  " + result);
             }// Handle pointer declarations
             else if (statement.matches("(int|float|double|char|short|long|unsigned|signed)\\s*\\*\\s*[a-zA-Z_][a-zA-Z0-9_]*\\s*(=.*)?")) {
                 processPointerDeclaration(statement);
@@ -123,10 +156,10 @@ public class ThreeAddressCodeGenerator {
             else if (statement.matches(".+=.+")) { // Match assignment or compound assignment
                 processAssignment(statement);
             } else if(statement.startsWith("++") || statement.startsWith("--")){
-                parseExpression(statement);
+                parseExpression(statement, null);
             }
             else if(statement.endsWith("++") || statement.endsWith("--")){
-                parseExpression(statement);
+                parseExpression(statement, null);
             }
         }
     }
@@ -146,21 +179,23 @@ public class ThreeAddressCodeGenerator {
 
             // Decompose compound assignment (e.g., a += b -> a = a + b)
             String simpleOperator = operator.substring(0, operator.length() - 1); // Extract base operator (e.g., +, -, etc.)
-            String result = parseExpression(lhs + " " + simpleOperator + " " + rhs); // Parse the equivalent binary expression
+            String result = parseExpression(lhs + " " + simpleOperator + " " + rhs, lhs); // Parse the equivalent binary expression
             instructions.add(lhs + " = " + result); // Emit assignment instruction
         } else if(statement.matches(".+=.+")){
             // Handle simple assignments
             String[] parts = statement.split("=");
             String lhs = parts[0].trim(); // Left-hand side (variable being assigned)
             String rhs = parts[1].trim(); // Right-hand side (expression)
+//            System.out.println("RHS: "+rhs);
             // check for pre-increment/decrement (e.g., ++x, --x)
-            if(rhs.matches("(\\+\\+|--)[a-zA-Z_][a-zA-Z0-9_]*;")){
+            if(rhs.matches("(\\+\\+|--)[a-zA-Z_][a-zA-Z0-9_]*")){
                 String operator = rhs.substring(0,2); // extract operator (++ or --)
                 String variable = rhs.substring(2).trim(); // extract variable name (++var)
                 String temp = newTemp(); // Temporary variable for incremented value
                 emit("+", variable, "1", temp); // generates the TAC for the operation
                 instructions.add(lhs + " = " + temp);
-            }else if(rhs.matches("[a-zA-Z_][a-zA-Z0-9_]*(\\+\\+|--);")){
+            }else if(rhs.matches("[a-zA-Z_][a-zA-Z0-9_]*(\\+\\+|--)")){
+
                 String variable = rhs.substring(0, rhs.length() - 2).trim(); // extract the variable name
                 String operator = rhs.substring(rhs.length()-2); // extract post inc/dec operator (x++ or x--)
                 String temp = newTemp(); // Temporary variable for the original value
@@ -168,8 +203,19 @@ public class ThreeAddressCodeGenerator {
                 emit("+", variable, "1", variable); // increment the variable
             }else {
                 // handle simple assignment expression (x = y + z)
-                String result = parseExpression(rhs);
-                instructions.add(lhs + " = " + result); // Emit assignment instruction
+                String result = parseExpression(rhs, lhs);
+//                System.out.println("parsing the expression : "+rhs);
+//                if (lastAssignedVariable != null && result.equals(lastAssignedVariable)) {
+//                    instructions.add(lhs + " = " + lastAssignedVariable); // Direct assignment
+//                } else {
+//                    instructions.add(lhs + " = " + result); // Emit standard assignment
+//                }
+//
+//                lastAssignedVariable = lhs; // Update tracking for optimization
+//                lastExpression = rhs;
+                if (!result.equals(lhs)) {
+                    instructions.add(lhs + " = " + result); // Emit assignment only if necessary
+                }
             }
         }
 
@@ -178,12 +224,13 @@ public class ThreeAddressCodeGenerator {
     /**
      * Parses an expression and generates TAC instructions.
      */
-    private String parseExpression(String expression) {
+    private String parseExpression(String expression, String resultVar) {
         Stack<String> operands = new Stack<>();
         Stack<Token> operators = new Stack<>();
 
-        // Updated regex token pattern
-       String tokenPattern = "\\+\\+|--|==|!=|<=|>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|<<=|>>=|&&|\\|\\||<<|>>|[-+*/%&|^<>=()~\\[\\]?:]|[a-zA-Z_][a-zA-Z0-9_]*|\\d+";
+        // regex token pattern
+//       String tokenPattern = "|\\b0[xX][0-9a-fA-F]+\\b\\+\\+|--|==|!=|<=|>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|<<=|>>=|&&|\\|\\||<<|>>|[-+*/%&|^<>=()~\\[\\]?:]|[a-zA-Z_][a-zA-Z0-9_]*|\\d+";
+        String tokenPattern = "\\b0[xX][0-9a-fA-F]+\\b|[a-zA-Z_][a-zA-Z0-9_]*|\\+\\+|--|==|!=|<=|>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|<<=|>>=|&&|\\|\\||<<|>>|[-+*/%&|^<>=()~\\[\\]?:]|\\d+";
 
         Pattern pattern = Pattern.compile(tokenPattern);
         Matcher matcher = pattern.matcher(expression);
@@ -203,6 +250,7 @@ public class ThreeAddressCodeGenerator {
             } else if (token.isOperator()) {
                 // Handle Postfix Increment/Decrement (e.g., b++)
                 if (prevToken != null && prevToken.isOperand() && (token.getValue().equals("++") || token.getValue().equals("--"))) {
+                    System.out.println("yo here");
                     String variable = operands.pop();
                     String temp = newTemp();
                     // if the operator exist after the postfix then
@@ -231,6 +279,7 @@ public class ThreeAddressCodeGenerator {
 //                    processOperation(operands, operator);
                     prevToken = Token.fromString(nextOperand);
                 } else {
+                    // handling unary
                     if (token.getValue().equals("~")
                             && (prevToken == null || prevToken.isOperator() || (prevToken.isParenthesis() && prevToken.getValue().equals("(")))) {
                         if (!matcher.find()) {
@@ -246,7 +295,7 @@ public class ThreeAddressCodeGenerator {
                         String operator = token.getValue();
 //                        System.out.println("[currently processing :]"+ operator);
                         operands.push(nextOperand);
-                        processOperation(operands, operator);
+                        processOperation(operands, operator, resultVar);
                         prevToken = Token.fromString(nextOperand);}
                     else if (prevToken == null || prevToken.isOperator() || (prevToken.isParenthesis() && prevToken.getValue().equals("("))) {
                         // handle unary operators
@@ -260,7 +309,7 @@ public class ThreeAddressCodeGenerator {
 //                            String temp = newTemp();
 //                            emit(operator, nextOperand, null, temp);
                             operands.push(nextOperand);
-                            processOperation(operands, operator);
+                            processOperation(operands, operator, resultVar);
                             prevToken = Token.fromString(nextOperand);
                         }
                     } else {
@@ -269,7 +318,7 @@ public class ThreeAddressCodeGenerator {
                                 (associativity(token.getValue()).equals("L") && precedence(operators.peek().getValue()) >= precedence(token.getValue())) ||
                                         (associativity(token.getValue()).equals("R") && precedence(operators.peek().getValue()) > precedence(token.getValue()))
                         )) {
-                            processOperation(operands, operators.pop().getValue());
+                            processOperation(operands, operators.pop().getValue(), resultVar);
                         }
                         operators.push(token);
                         prevToken = token;
@@ -280,7 +329,7 @@ public class ThreeAddressCodeGenerator {
                     operators.push(token);
                 } else if (token.getValue().equals(")")) {
                     while (!operators.isEmpty() && !operators.peek().getValue().equals("(")) {
-                        processOperation(operands, operators.pop().getValue());
+                        processOperation(operands, operators.pop().getValue(), resultVar);
                     }
                     if (operators.isEmpty() || !operators.peek().getValue().equals("(")) {
                         throw new IllegalArgumentException("Mismatched parentheses in expression: " + expression);
@@ -289,6 +338,10 @@ public class ThreeAddressCodeGenerator {
                 }
                 prevToken = token;
             }
+
+//            System.out.println("Processed token: " + tokenStr);
+//            System.out.println("Operands stack: " + operands);
+//            System.out.println("Operators stack: " + operators);
         }
 
         while (!operators.isEmpty()) {
@@ -296,7 +349,7 @@ public class ThreeAddressCodeGenerator {
             if (op.getValue().equals("(")) {
                 throw new IllegalArgumentException("Mismatched parentheses in expression: " + expression);
             }
-            processOperation(operands, op.getValue());
+            processOperation(operands, op.getValue(), resultVar);
         }
         for (String instr : delayedInstructions) {
             instructions.add(instr);
@@ -315,7 +368,7 @@ public class ThreeAddressCodeGenerator {
     /**
      * Processes a single operation and generates TAC.
      */
-    private void processOperation(Stack<String> operands, String operator) {
+    private void processOperation(Stack<String> operands, String operator, String result) {
         String expression; // Cache key for the expression
         String temp; // Temporary variable for the result
 
@@ -331,16 +384,15 @@ public class ThreeAddressCodeGenerator {
             if (expressionCache.containsKey(expression)) {
                 operands.push(expressionCache.get(expression)); // Reuse existing temporary variable
             } else {
-                if (operator.equals("~")) {
-                    // Special case for bitwise NOT operator
-                    temp = newTemp();
-                    emit(operator, operand, null, temp); // Emit TAC for bitwise NOT
+                if (result != null) {
+                    emit(operator, operand, null, result);
+                    operands.push(result);
                 } else {
                     temp = newTemp(); // Generate new temporary variable
-                    emit(operator, operand, null, temp); // Emit TAC for generic unary operation
+                    emit(operator, operand, null, temp);
+                    expressionCache.put(expression, temp); // Cache the result
+                    operands.push(temp);
                 }
-                expressionCache.put(expression, temp); // Cache the result
-                operands.push(temp);
             }
         } else { // Handle binary operators
             if (operands.size() < 2) {
@@ -355,7 +407,7 @@ public class ThreeAddressCodeGenerator {
             if (expressionCache.containsKey(expression)) {
                 operands.push(expressionCache.get(expression)); // Reuse existing temporary variable
             } else {
-                temp = newTemp(); // Generate new temporary variable
+                temp = result != null ? result : newTemp(); // Generate new temporary variable
                 emit(operator, operand1, operand2, temp); // Emit TAC for binary operation
                 expressionCache.put(expression, temp); // Cache the result
                 operands.push(temp);
@@ -393,15 +445,7 @@ public class ThreeAddressCodeGenerator {
         };
     }
 
-    private void processOperators(Stack<String> operands, Stack<Token> operators, Token token) {
-        while (!operators.isEmpty() && (
-                (associativity(token.getValue()).equals("L") && precedence(operators.peek().getValue()) >= precedence(token.getValue())) ||
-                        (associativity(token.getValue()).equals("R") && precedence(operators.peek().getValue()) > precedence(token.getValue()))
-        )) {
-            processOperation(operands, operators.pop().getValue());
-        }
-        operators.push(token);
-    }
+
 
     /**
      * Preprocesses the function body to remove variable declarations.
@@ -432,7 +476,7 @@ public class ThreeAddressCodeGenerator {
         String pointer = lhs.split("\\*")[1].trim(); // Extract pointer variable, e.g., "ptr"
 
         if (rhs != null) {
-            String result = parseExpression(rhs); // Parse the initialization expression
+            String result = parseExpression(rhs, lhs); // Parse the initialization expression
             instructions.add(pointer + " = " + result); // Emit TAC for initialization
         } else {
             instructions.add(pointer + " = null"); // Default initialization for uninitialized pointers
@@ -450,23 +494,25 @@ public class ThreeAddressCodeGenerator {
         }
     }
 
+
+
     public static void main(String[] args) {
         ThreeAddressCodeGenerator generator = new ThreeAddressCodeGenerator();
 
         // Example function body
         String functionBody = """
-                int x = 5;
-                int y = ~x;
-                int z = ~x + 2 * 6;
-                int* ptr = & x;
-                int y = z + *ptr + 3;  
-                a = a + b * c % d;
-                x = p++ + ++p;
-                a = 10 * p;
-                return z;
-                """;
+                a = (x & 0x2) >> 1;
+                b = (x & 0x1);
+                c = (y & 0x2) >> 1;
+                d = (y & 0x1);
+                e = (a ^ b) & (c ^ d);
+                p = (a & c) ^ e;
+                q = (b & d) ^ e;
+                y = x++;
+               """;
 
         generator.translateToTAC(functionBody);
         generator.printInstructions();
+        System.out.println("Number of domand required : "+ generator.getDom_count());
     }
 }
